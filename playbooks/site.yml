@@ -27,5 +27,19 @@
           - vpn_config.ipv4_network is defined
           - vpn_config.ipv6_network is defined
         fail_msg: "Use a supported Ubuntu VPS and a non-root SSH user with sudo before deploying."
+
+    - name: Inspect existing host firewall for OCI boot-volume rules
+      ansible.builtin.command: iptables-save
+      register: vpn_existing_iptables
+      changed_when: false
+      failed_when: false
+
+    - name: Stop before replacing OCI boot-volume firewall rules
+      ansible.builtin.assert:
+        that:
+          - vpn_existing_iptables.rc == 0
+          - "'169.254.0.2' not in vpn_existing_iptables.stdout"
+          - "'169.254.2.' not in vpn_existing_iptables.stdout"
+        fail_msg: "Cannot verify a clean host firewall or OCI boot-volume rules were detected. This playbook is not yet compatible with OCI; see docs/ORACLE.md."
   roles:
     - gateway
