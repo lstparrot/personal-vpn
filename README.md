@@ -2,6 +2,8 @@
 
 Open-source deployment kit for a small self-hosted WireGuard gateway on a US VPS. It provisions the server, creates one profile per device, and can revoke an individual device. The default profile routes all traffic through the VPS.
 
+**Provider compatibility:** do not run the current playbook on a standard Oracle Cloud image. OCI requires preserving boot-volume firewall rules that this playbook currently replaces. See [Oracle account and VM setup](docs/ORACLE.md); OCI deployment support still needs implementation and live validation.
+
 **Current status:** server automation and full-tunnel profile management are implemented. Selective routing for Claude Desktop, Claude Code, and Cursor on Windows/macOS is a planned client prototype. Strict per-app kill switch is **not implemented or verified**. See [the project plan](PLAN.md) for requirements and acceptance tests.
 
 ## Requirements
