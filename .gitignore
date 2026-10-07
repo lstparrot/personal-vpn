@@ -1,0 +1,8 @@
+inventory/hosts.yml
+config.json
+secrets/
+state/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

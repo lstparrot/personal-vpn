@@ -1,0 +1,12 @@
+[Interface]
+Address = {{ vpn_config.server_ipv4 }}/{{ vpn_config.ipv4_network.split('/')[1] }}, {{ vpn_config.server_ipv6 }}/{{ vpn_config.ipv6_network.split('/')[1] }}
+ListenPort = {{ vpn_config.port }}
+PostUp = wg set %i private-key /etc/wireguard/%i.key
+
+{% for peer in vpn_peers | rejectattr('revoked', 'defined') | sort(attribute='name') %}
+[Peer]
+# {{ peer.name }}
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.ipv4 }}/32, {{ peer.ipv6 }}/128
+
+{% endfor %}

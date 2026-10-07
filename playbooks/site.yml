@@ -1,0 +1,31 @@
+---
+- name: Configure personal VPN gateway
+  hosts: vpn
+  become: true
+  gather_facts: true
+  vars:
+    vpn_config: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../config.json') | from_json }}"
+    vpn_peers: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../peers.json') | from_json }}"
+    vpn_interface: wg0
+    vpn_public_interface: "{{ ansible_facts['default_ipv4']['interface'] }}"
+  pre_tasks:
+    - name: Check supported host and safe SSH setup
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'Debian'
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['distribution_version'] == '24.04'
+          - ansible_user is defined
+          - ansible_user != 'root'
+          - vpn_config.ssh_port | int == (ansible_port | default(22)) | int
+          - ansible_facts['default_ipv4']['interface'] is defined
+          - vpn_config.endpoint is defined
+          - vpn_config.port | int > 0
+          - vpn_config.port | int < 65536
+          - vpn_config.ssh_port | int > 0
+          - vpn_config.ssh_port | int < 65536
+          - vpn_config.ipv4_network is defined
+          - vpn_config.ipv6_network is defined
+        fail_msg: "Use a supported Ubuntu VPS and a non-root SSH user with sudo before deploying."
+  roles:
+    - gateway

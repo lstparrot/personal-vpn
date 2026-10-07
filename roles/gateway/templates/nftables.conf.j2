@@ -1,0 +1,33 @@
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state established,related accept
+        iifname "lo" accept
+        ip protocol icmp accept
+        meta l4proto ipv6-icmp accept
+        iifname "{{ vpn_public_interface }}" tcp dport {{ vpn_config.ssh_port }} accept
+        udp dport {{ vpn_config.port }} accept
+        iifname "{{ vpn_interface }}" udp dport 53 accept
+        iifname "{{ vpn_interface }}" tcp dport 53 accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state established,related accept
+        iifname "{{ vpn_interface }}" oifname "{{ vpn_public_interface }}" ip saddr {{ vpn_config.ipv4_network }} accept
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+table ip nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "{{ vpn_public_interface }}" ip saddr {{ vpn_config.ipv4_network }} masquerade
+    }
+}

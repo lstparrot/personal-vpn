@@ -1,0 +1,20 @@
+---
+- name: Reload nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: reloaded
+
+- name: Restart WireGuard
+  ansible.builtin.systemd_service:
+    name: wg-quick@wg0
+    state: restarted
+
+- name: Restart Unbound
+  ansible.builtin.systemd_service:
+    name: unbound
+    state: restarted
+
+- name: Reload SSH
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded

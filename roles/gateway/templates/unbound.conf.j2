@@ -1,0 +1,10 @@
+server:
+    interface: 127.0.0.1
+    interface: {{ vpn_config.server_ipv4 }}
+    port: 53
+    access-control: 127.0.0.0/8 allow
+    access-control: {{ vpn_config.ipv4_network }} allow
+    access-control: 0.0.0.0/0 refuse
+    do-ip6: no
+    hide-identity: yes
+    hide-version: yes

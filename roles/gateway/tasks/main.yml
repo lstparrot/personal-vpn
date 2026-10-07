@@ -1,0 +1,197 @@
+---
+- name: Install gateway packages
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - nftables
+      - unbound
+      - unattended-upgrades
+    state: present
+    update_cache: true
+
+- name: Enable IPv4 forwarding
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/70-personal-vpn.conf
+    content: "net.ipv4.ip_forward = 1\n"
+    owner: root
+    group: root
+    mode: '0644'
+  register: vpn_sysctl
+
+- name: Apply forwarding setting
+  ansible.builtin.command: sysctl --system
+  when: vpn_sysctl.changed
+  changed_when: true
+
+- name: Create WireGuard configuration directory
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Generate server private key on the VPS
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    wg genkey > /etc/wireguard/wg0.key
+  args:
+    creates: /etc/wireguard/wg0.key
+    executable: /bin/sh
+  no_log: true
+
+- name: Read server public key
+  ansible.builtin.shell: wg pubkey < /etc/wireguard/wg0.key
+  args:
+    executable: /bin/sh
+  register: vpn_server_public_key
+  changed_when: false
+
+- name: Create local state directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/../state"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Check previously deployed server identity
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../state/server.pub"
+  register: vpn_previous_public_key_file
+  delegate_to: localhost
+  become: false
+
+- name: Read previous server identity
+  ansible.builtin.slurp:
+    src: "{{ playbook_dir }}/../state/server.pub"
+  register: vpn_previous_public_key
+  when: vpn_previous_public_key_file.stat.exists
+  delegate_to: localhost
+  become: false
+
+- name: Stop if the server key changed while active peers still use it
+  ansible.builtin.assert:
+    that:
+      - not vpn_previous_public_key_file.stat.exists or
+        (vpn_previous_public_key.content | b64decode | trim) == vpn_server_public_key.stdout or
+        (vpn_peers | rejectattr('revoked', 'defined') | list | length) == 0
+    fail_msg: "Server key changed. Revoke all old peers offline, deploy, then issue new profiles."
+
+- name: Save public key on controller
+  ansible.builtin.copy:
+    content: "{{ vpn_server_public_key.stdout }}\n"
+    dest: "{{ playbook_dir }}/../state/server.pub"
+    mode: '0644'
+  delegate_to: localhost
+  become: false
+
+- name: Configure nftables
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'nft -c -f %s'
+  notify: Reload nftables
+
+- name: Enable nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Apply firewall before starting VPN
+  ansible.builtin.meta: flush_handlers
+
+- name: Configure WireGuard
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart WireGuard
+
+- name: Enable WireGuard
+  ansible.builtin.systemd_service:
+    name: wg-quick@wg0
+    enabled: true
+    state: started
+
+- name: Apply peer changes before starting DNS
+  ansible.builtin.meta: flush_handlers
+
+- name: Configure Unbound
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: /etc/unbound/unbound.conf.d/personal-vpn.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'unbound-checkconf %s'
+  notify: Restart Unbound
+
+- name: Create Unbound service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/unbound.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Start DNS only after the VPN interface
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/unbound.service.d/personal-vpn.conf
+    content: "[Unit]\nRequires=wg-quick@wg0.service\nAfter=wg-quick@wg0.service\n"
+    owner: root
+    group: root
+    mode: '0644'
+  register: vpn_unbound_override
+  notify: Restart Unbound
+
+- name: Enable Unbound
+  ansible.builtin.systemd_service:
+    name: unbound
+    daemon_reload: "{{ vpn_unbound_override.changed }}"
+    enabled: true
+    state: started
+
+- name: Apply DNS configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Disable password and root SSH logins
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-personal-vpn.conf
+    content: "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n"
+    owner: root
+    group: root
+    mode: '0644'
+    validate: '/usr/sbin/sshd -t -f %s'
+  when: vpn_config.harden_ssh | default(true) | bool
+  notify: Reload SSH
+
+- name: Check effective SSH authentication policy
+  ansible.builtin.command: /usr/sbin/sshd -T
+  register: vpn_effective_ssh
+  changed_when: false
+  when: vpn_config.harden_ssh | default(true) | bool
+
+- name: Ensure password and root SSH logins are disabled
+  ansible.builtin.assert:
+    that:
+      - "'passwordauthentication no' in vpn_effective_ssh.stdout_lines"
+      - "'kbdinteractiveauthentication no' in vpn_effective_ssh.stdout_lines"
+      - "'permitrootlogin no' in vpn_effective_ssh.stdout_lines"
+    fail_msg: "The effective sshd configuration still permits password or root login; inspect earlier include files."
+  when: vpn_config.harden_ssh | default(true) | bool
