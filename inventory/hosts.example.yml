@@ -1,9 +1,0 @@
-all:
-  children:
-    vpn:
-      hosts:
-        vpn-server:
-          ansible_host: 203.0.113.10
-          ansible_user: ubuntu
-          ansible_port: 22
-          ansible_become: true

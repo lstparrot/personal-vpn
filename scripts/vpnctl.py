@@ -18,6 +18,7 @@ import tempfile
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 HOST_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}\Z")
+USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}\Z")
 
 
 class VpnError(Exception):
@@ -49,7 +50,10 @@ def load_json(path: Path) -> object:
 
 
 def load_config(root: Path) -> dict:
-    config = load_json(root / "config.json")
+    return validate_config(load_json(root / "config.json"))
+
+
+def validate_config(config: object) -> dict:
     if not isinstance(config, dict):
         raise VpnError("config.json must contain an object")
     required = ("endpoint", "port", "ssh_port", "ipv4_network", "server_ipv4", "ipv6_network", "server_ipv6")
@@ -80,11 +84,33 @@ def load_config(root: Path) -> dict:
         raise VpnError("server addresses must belong to the configured networks")
     if server_ipv4 != ipv4_net.network_address + 1 or server_ipv6 != ipv6_net.network_address + 1:
         raise VpnError("server addresses must be the first host address in each network")
-    config["port"] = port
-    config["ssh_port"] = ssh_port
-    config["_ipv4_network"] = ipv4_net
-    config["_ipv6_network"] = ipv6_net
-    return config
+    return {**config, "port": port, "ssh_port": ssh_port, "_ipv4_network": ipv4_net, "_ipv6_network": ipv6_net}
+
+
+def init_config(root: Path, endpoint: str, ssh_user: str, ssh_port: int = 22, force: bool = False) -> None:
+    if not USER_RE.fullmatch(ssh_user) or ssh_user == "root":
+        raise VpnError("SSH user must be an existing non-root account (lowercase letters, digits, '-' or '_')")
+    config_path = root / "config.json"
+    inventory_path = root / "inventory" / "hosts.yml"
+    existing = [str(path.relative_to(root)) for path in (config_path, inventory_path) if path.exists()]
+    if existing and not force:
+        raise VpnError(f"{', '.join(existing)} already exists; pass --force to replace")
+    example = load_json(root / "config.example.json")
+    config = {**example, "endpoint": endpoint, "ssh_port": ssh_port}
+    validated = validate_config(config)
+    inventory = (
+        "all:\n"
+        "  children:\n"
+        "    vpn:\n"
+        "      hosts:\n"
+        "        vpn-server:\n"
+        f"          ansible_host: {endpoint}\n"
+        f"          ansible_user: {ssh_user}\n"
+        f"          ansible_port: {validated['ssh_port']}\n"
+        "          ansible_become: true\n"
+    )
+    atomic_write(config_path, json.dumps(config, indent=2) + "\n", 0o644)
+    atomic_write(inventory_path, inventory, 0o644)
 
 
 def load_peers(root: Path, config: dict) -> list[dict]:
@@ -163,6 +189,8 @@ def profile(name: str, private_key: str, server_public_key: str, ipv4: str, ipv6
 def deploy(root: Path) -> None:
     if shutil.which("ansible-playbook") is None:
         raise VpnError("Install requirements.txt and activate the virtual environment before deploying")
+    if not (root / "inventory" / "hosts.yml").exists():
+        raise VpnError("Missing inventory/hosts.yml. Run 'init' first.")
     result = subprocess.run(["ansible-playbook", "playbooks/site.yml"], cwd=root, check=False)
     if result.returncode != 0:
         raise VpnError("Deployment failed. Peer changes may not be active on the VPS; fix the error and run 'deploy'.")
@@ -218,6 +246,11 @@ def revoke_peer(root: Path, name: str, deploy_now: bool = True) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    init_parser = subparsers.add_parser("init", help="create config.json and inventory for a new VPS")
+    init_parser.add_argument("endpoint", help="public IPv4 address or DNS name of the VPS")
+    init_parser.add_argument("--user", required=True, help="non-root SSH user with passwordless sudo")
+    init_parser.add_argument("--ssh-port", type=int, default=22)
+    init_parser.add_argument("--force", action="store_true", help="replace existing local files")
     subparsers.add_parser("check", help="validate local public configuration")
     subparsers.add_parser("deploy", help="configure the VPS from local state")
     subparsers.add_parser("list", help="list peers without showing keys")
@@ -229,7 +262,10 @@ def main() -> int:
     revoke_parser.add_argument("--no-deploy", action="store_true", help="prepare changes offline")
     args = parser.parse_args()
     try:
-        if args.command == "deploy":
+        if args.command == "init":
+            init_config(PROJECT_ROOT, args.endpoint, args.user, args.ssh_port, force=args.force)
+            print("Created config.json and inventory/hosts.yml; run 'check', then 'deploy'")
+        elif args.command == "deploy":
             load_peers(PROJECT_ROOT, load_config(PROJECT_ROOT))
             deploy(PROJECT_ROOT)
             print("VPS configuration applied")

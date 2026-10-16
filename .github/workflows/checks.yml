@@ -13,8 +13,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
-      - run: cp config.example.json config.json
-      - run: cp inventory/hosts.example.yml inventory/hosts.yml
+      - run: python scripts/vpnctl.py init 203.0.113.10 --user ubuntu
       - run: python -m unittest discover -s tests -v
       - run: python scripts/vpnctl.py check
       - run: ansible-playbook --syntax-check playbooks/site.yml

@@ -1,81 +1,89 @@
 # Personal VPN gateway
 
-Open-source deployment kit for a small self-hosted WireGuard gateway on a US VPS. It provisions the server, creates one profile per device, and can revoke an individual device. The default profile routes all traffic through the VPS.
+Turn a fresh VPS into your own WireGuard VPN in a few commands. One profile per device, revoke any device at any time, all traffic routed through the server.
 
-**Provider compatibility:** do not run the current playbook on a standard Oracle Cloud image. OCI requires preserving boot-volume firewall rules that this playbook currently replaces. See [Oracle account and VM setup](docs/ORACLE.md); OCI deployment support still needs implementation and live validation.
+- **WireGuard** tunnel, **Unbound** DNS resolver on the server, **nftables** firewall with IPv4 NAT.
+- Server private key is generated on the VPS and never leaves it; client keys stay on your computer.
+- SSH hardening (no password or root login) and automatic security updates.
+- Works with the official WireGuard apps on Windows, macOS, Linux, iOS and Android.
 
-**Current status:** server automation and full-tunnel profile management are implemented. Selective routing for Claude Desktop, Claude Code, and Cursor on Windows/macOS is a planned client prototype. Strict per-app kill switch is **not implemented or verified**. See [the project plan](PLAN.md) for requirements and acceptance tests.
+> **Status: early release, not yet validated on a live VPS.** Unit tests and Ansible syntax checks pass in CI, but a full end-to-end run ([docs/VERIFY.md](docs/VERIFY.md)) hasn't been done yet. Deploy only to a fresh, disposable VPS with console access, and please [open an issue](../../issues) with your results, whether it worked or not.
 
 ## Requirements
 
-- A fresh **Ubuntu Server 24.04 LTS** VPS in the desired US location with a dedicated public IPv4 address, SSH access for a non-root sudo user, and a provider console for recovery. The VPS should have no other hosted services: this deployment owns `/etc/nftables.conf` and replaces its ruleset.
-- A computer with Python 3.10+, Ansible Core, and `wg` from WireGuard tools. On macOS, `brew install wireguard-tools`; on Ubuntu, `sudo apt install wireguard-tools`.
-- A working SSH public-key login to the VPS. Verify a new login and passwordless `sudo` before deployment; the current command does not prompt for a sudo password. The playbook disables password and root SSH login by default.
-- A plan with at least 1 TB of **outbound** traffic included, and a known overage price. This is the initial target, not a traffic cap enforced by the software.
+**Server:** a fresh **Ubuntu Server 24.04 LTS** VPS with a public IPv4 address, used only for this VPN. The playbook replaces the whole host firewall (`/etc/nftables.conf`), so don't run it on a machine that hosts other services. You need SSH key login as a **non-root user with passwordless `sudo`**, and access to the provider's web console for recovery.
 
-## Deploy
+> Oracle Cloud is not supported yet: its images depend on firewall rules this playbook would remove. The playbook detects this and stops. See [docs/ORACLE.md](docs/ORACLE.md).
 
-1. Create the VPS, add your SSH public key in the provider console, and log in once from your computer. Keep the provider's recovery console available.
-2. Prepare the local configuration:
+**Your computer:** Python 3.10+, `git`, and WireGuard tools (`brew install wireguard-tools` on macOS, `sudo apt install wireguard-tools` on Ubuntu/Debian).
 
-   ```sh
-   python3 -m venv .venv
-   . .venv/bin/activate
-   python -m pip install -r requirements.txt
-   cp config.example.json config.json
-   cp inventory/hosts.example.yml inventory/hosts.yml
-   ```
+## Quick start
 
-3. Replace `203.0.113.10` in both local files with the VPS IPv4 address. Set `ansible_user` to the tested non-root sudo account. For a nonstandard SSH port, update both `ssh_port` in `config.json` and `ansible_port` in `inventory/hosts.yml`. Keep the VPN subnet defaults unless they conflict with a network you use.
-4. Validate and deploy:
+```sh
+git clone <this repository> personal-vpn && cd personal-vpn
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
 
-   ```sh
-   python scripts/vpnctl.py check
-   python scripts/vpnctl.py deploy
-   ```
+python scripts/vpnctl.py init 198.51.100.7 --user ubuntu   # your VPS IP and SSH user
+python scripts/vpnctl.py deploy
+python scripts/vpnctl.py add laptop
+```
 
-5. Test a **new SSH session** before closing the original one. Confirm the provider console still works.
-6. Add one device and import its profile into the official WireGuard client:
+`init` takes `--ssh-port` if SSH isn't on port 22. Before `deploy`, check that `ssh ubuntu@198.51.100.7 sudo -n true` works without a password prompt.
 
-   ```sh
-   python scripts/vpnctl.py add work-mac
-   ```
+After `deploy`, **open a new SSH session before closing the old one** to confirm you still have access.
 
-   The private profile is created at `secrets/peers/work-mac.conf`. Treat it as a credential. On Windows and macOS, install [the official WireGuard client](https://www.wireguard.com/install/), import the profile once, then use its connection switch. Do not share the profile through a public issue, screenshot, or repository.
+`add` writes the device profile to `secrets/peers/laptop.conf`. Import it into the [WireGuard app](https://www.wireguard.com/install/) and switch it on. On a phone, `qrencode -t ansiutf8 < secrets/peers/laptop.conf` shows a QR code to scan. The profile is a credential: don't post it, screenshot it, or commit it.
 
-After connection, verify that the visible IPv4 matches the VPS, DNS uses the VPN resolver, and IPv6 does not reveal the local network. The first release intentionally drops forwarded IPv6 rather than providing an IPv6 Internet exit; IPv6-only destinations will not work. Client OS behavior after the tunnel stops is separate from this server setting and must be tested before treating it as a kill switch.
+Then check that your public IPv4 is the VPS address, and that DNS and IPv6 leak tests show nothing from your local network. [docs/VERIFY.md](docs/VERIFY.md) has the full checklist.
 
-## Device management
+## Managing devices
 
 ```sh
 python scripts/vpnctl.py list
-python scripts/vpnctl.py add second-device
-python scripts/vpnctl.py revoke work-mac
+python scripts/vpnctl.py add phone
+python scripts/vpnctl.py revoke laptop
 ```
 
-`add` and `revoke` apply the server change immediately through Ansible. If deployment fails, the command returns an error and the change is **not confirmed on the VPS**. Fix the problem and run `python scripts/vpnctl.py deploy` again. `--no-deploy` prepares changes offline; always deploy before assuming a revoked device has lost access. A revoked profile is deleted locally after a successful deployment, but copies on the device or in backups must also be removed by the owner.
+`add` and `revoke` apply the change to the server right away. If the deployment fails, the change is saved locally but **not active on the server**: fix the error and run `deploy` again. `--no-deploy` prepares a change offline. Revoked names can't be reused. After a successful revoke the local profile is deleted; remove any copies on the device yourself.
 
-The public peer registry is `peers.json`. Client private keys and profiles live only in ignored `secrets/`. The server private key is generated and stored only on the VPS. Back up `secrets/` securely; do not commit it. If the server key is lost when replacing the VPS, the playbook stops while active peers still reference the old key. Revoke them offline with `--no-deploy`, deploy the new server, then issue fresh profiles under new names.
+## What is stored where
 
-## Connectivity and recovery
+| Location | Contents | In git? |
+| --- | --- | --- |
+| `peers.json` | device names, public keys, VPN addresses | yes (public data only) |
+| `config.json`, `inventory/hosts.yml` | your server address and SSH user | no |
+| `secrets/peers/*.conf` | device private keys and profiles | no |
+| `state/server.pub` | server public key | no |
+| VPS `/etc/wireguard/wg0.key` | server private key | never leaves the server |
 
-- Firewall permits the configured SSH port on the public interface, the WireGuard UDP port, and DNS from the VPN network. It blocks VPN clients from reaching each other or SSH through the tunnel.
-- The gateway uses Unbound for VPN DNS and nftables for firewall and IPv4 NAT. It enables automatic security updates without automatic reboot.
-- If SSH stops working, use the provider console to inspect `/etc/nftables.conf`, `/etc/ssh/sshd_config.d/00-personal-vpn.conf`, and service status. Never disable the provider console before testing an SSH login after deployment.
-- When a client cannot connect from a particular ISP, first verify UDP reachability and the server port. The optional AmneziaWG transport in [the plan](PLAN.md) is **not implemented** in this release.
-- If DNS fails, check `wg-quick@wg0` and `unbound` on the VPS. DNS binds to the VPN address and starts after the WireGuard interface.
+Back up `secrets/` and `state/` somewhere safe. If you move to a new VPS, the server key changes and the playbook stops while old devices are active. Revoke them with `--no-deploy`, deploy, then add fresh profiles under new names. If you fork this repo to keep your own `peers.json`, keep that fork private if you don't want device names public.
 
-## Open-source safety
+## Network behavior
 
-The repo excludes `config.json`, inventory with real addresses, generated profiles, and local state. Keep provider tokens and SSH keys outside this directory. Before making a repository public, inspect its entire history for secrets and follow [SECURITY.md](SECURITY.md). The project code is licensed under Apache-2.0; WireGuard and other installed packages retain their own licenses.
+- Open ports on the server: SSH (on the public interface only) and the WireGuard UDP port (default `51820`). DNS answers only inside the tunnel.
+- VPN clients can't reach each other or SSH through the tunnel.
+- Forwarded IPv6 is dropped, so IPv6 doesn't leak, but IPv6-only sites won't load.
+- The server doesn't block traffic when the tunnel drops. Whether apps fall back to your normal connection depends on the client OS. Test it yourself before relying on it as a kill switch.
 
-## Local checks
+## Troubleshooting
+
+- **Lost SSH:** use the provider console and check `/etc/nftables.conf`, `/etc/ssh/sshd_config.d/00-personal-vpn.conf`, and `systemctl status ssh`.
+- **No handshake:** make sure the provider's network firewall or security group allows inbound UDP on the WireGuard port. Some ISPs block WireGuard; this release has no obfuscated transport.
+- **No DNS:** check `systemctl status wg-quick@wg0 unbound` on the server. Unbound listens on the VPN address and starts after WireGuard.
+
+## Development
 
 ```sh
 python -m unittest discover -s tests -v
+python scripts/vpnctl.py check
 ansible-playbook --syntax-check playbooks/site.yml
 ```
 
-These checks do not prove a successful installation or kill switch on a real VPS and desktop. The live acceptance checks in [PLAN.md](PLAN.md) remain required.
+These checks don't replace a real install. For networking changes, run [docs/VERIFY.md](docs/VERIFY.md) on a real VPS and client. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
-Use [the verification checklist](docs/VERIFY.md) when testing a new VPS and each desktop platform.
+**Not implemented yet:** per-app split tunneling, a verified kill switch, an obfuscated transport such as AmneziaWG, and Oracle Cloud support.
+
+## License
+
+Apache-2.0. WireGuard and other installed packages keep their own licenses.

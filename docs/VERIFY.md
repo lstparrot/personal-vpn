@@ -1,27 +1,23 @@
-# Проверка перед использованием
+# Verification checklist
 
-Проверяйте каждый ноутбук отдельно. Сначала создайте тестовый peer и подключите официальный клиент WireGuard. Результаты запишите без публикации IP, ключей и скриншотов профиля.
+Run this on a new VPS and on each client device. Create a test device with `vpnctl.py add`. When you share results, leave out IP addresses, keys and screenshots of profiles.
 
-## Сервер
+## Server
 
-1. Сохраните открытой исходную SSH-сессию, затем войдите во **вторую** сессию по ключу.
-2. На VPS проверьте состояние `wg-quick@wg0`, `unbound`, `nftables` и наличие UDP-порта WireGuard. Убедитесь, что DNS-порт 53 с публичного интерфейса недоступен.
-3. Перезагрузите VPS через консоль провайдера и повторите проверку SSH и сервисов.
-4. Повторно выполните `python scripts/vpnctl.py deploy`. Конфигурация не должна менять ключ сервера или отключать работающий доступ.
-5. Отзовите временный peer, примените конфигурацию и убедитесь, что он больше не устанавливает handshake.
+1. Keep the original SSH session open and log in again in a **second** session with your key.
+2. On the VPS, check that `wg-quick@wg0`, `unbound` and `nftables` are active and that the WireGuard UDP port is listening. From outside, confirm that port 53 is closed on the public address.
+3. Reboot the VPS from the provider console. Check SSH and the services again.
+4. Run `python scripts/vpnctl.py deploy` again. The server key must not change and access must keep working.
+5. Revoke the test device. Confirm it can no longer complete a handshake.
 
-## Клиент: полный туннель
+## Client (full tunnel)
 
-1. До подключения запишите внешний IPv4 и проверьте доступ к обычному сайту.
-2. Подключитесь и проверьте, что внешний IPv4 равен адресу VPS. Проверьте Claude Desktop, Claude Code, Cursor и локальный Agent по отдельности.
-3. Проверьте DNS leak и IPv6 leak на том же устройстве. В этом варианте у сервера нет выхода в IPv6: публичного IPv6 клиента не должно быть видно через VPN; IPv6-only ресурсы могут не открываться.
-4. Прервите UDP-соединение с VPS, затем остановите клиент WireGuard. Зафиксируйте фактическое поведение приложений и DNS. Без отдельной проверки клиента **не считайте полный туннель строгим kill switch**.
-5. Повторите тест после смены Wi-Fi и перезагрузки ОС. Проверьте, что обычный адрес возвращается после сознательного отключения туннеля.
+1. Before you connect, note your public IPv4 and check that a normal website opens.
+2. Connect. Your public IPv4 must now be the VPS address. Check the apps and sites you need, one by one.
+3. Run DNS and IPv6 leak tests on the same device. The server has no IPv6 exit, so your local IPv6 address must not appear while you're connected. IPv6-only sites may not load.
+4. Block UDP to the VPS, then stop the WireGuard client. Write down what apps and DNS actually do. Without this test, don't treat the full tunnel as a kill switch.
+5. Repeat after switching Wi-Fi networks and after rebooting the OS. After you disconnect on purpose, your normal address must come back.
 
-## Выборочный режим
+## Billing and IP reputation
 
-Это критерий приёмки для будущей клиентской реализации, а не доступная сейчас функция. Claude Desktop, отдельно запущенный Claude Code CLI, Cursor и его локальный Agent должны выходить через VPS; другие приложения должны оставаться на обычном маршруте. При остановке клиентского процесса, удалении виртуального интерфейса, блокировке UDP и после перезагрузки выбранные приложения не должны иметь прямой доступ к сети. Проверяйте IPv4, IPv6 и DNS, в том числе дочерние процессы. Облачные задания Claude/Cursor имеют собственную среду выполнения; их выходной адрес не задаётся VPN ноутбука.
-
-## Счёт и доступность
-
-Включите в панели провайдера уведомление о расходе трафика задолго до 1 ТБ и проверьте цену превышения. В течение пробного периода проверьте именно нужные сервисы с конкретного IP VPS: геолокация США сама по себе не доказывает пригодность адреса.
+Set a traffic usage alert in the provider panel well below your plan's limit, and check the overage price. During any trial period, test the services you care about from this specific IP: a US geolocation alone doesn't mean every service will accept the address.

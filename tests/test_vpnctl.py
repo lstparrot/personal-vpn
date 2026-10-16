@@ -69,5 +69,45 @@ class VpnCtlTests(unittest.TestCase):
             vpnctl.load_config(self.root)
 
 
+class InitTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.addCleanup(self.directory.cleanup)
+        example = vpnctl.PROJECT_ROOT / "config.example.json"
+        (self.root / "config.example.json").write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+        (self.root / "peers.json").write_text("[]\n", encoding="utf-8")
+
+    def test_init_writes_matching_config_and_inventory(self):
+        vpnctl.init_config(self.root, "198.51.100.7", "admin", 2222)
+
+        config = vpnctl.load_config(self.root)
+        inventory = (self.root / "inventory" / "hosts.yml").read_text(encoding="utf-8")
+        self.assertEqual(config["endpoint"], "198.51.100.7")
+        self.assertEqual(config["ssh_port"], 2222)
+        self.assertIn("ansible_host: 198.51.100.7\n", inventory)
+        self.assertIn("ansible_user: admin\n", inventory)
+        self.assertIn("ansible_port: 2222\n", inventory)
+
+    def test_init_refuses_to_overwrite_without_force(self):
+        vpnctl.init_config(self.root, "198.51.100.7", "admin")
+
+        with self.assertRaisesRegex(vpnctl.VpnError, "already exists"):
+            vpnctl.init_config(self.root, "198.51.100.8", "admin")
+        vpnctl.init_config(self.root, "198.51.100.8", "admin", force=True)
+        self.assertEqual(vpnctl.load_config(self.root)["endpoint"], "198.51.100.8")
+
+    def test_init_rejects_root_and_unsafe_user(self):
+        for user in ("root", "admin\nansible_become: false", "-oProxyCommand"):
+            with self.assertRaisesRegex(vpnctl.VpnError, "SSH user"):
+                vpnctl.init_config(self.root, "198.51.100.7", user)
+        self.assertFalse((self.root / "config.json").exists())
+
+    def test_init_rejects_invalid_endpoint(self):
+        with self.assertRaisesRegex(vpnctl.VpnError, "endpoint"):
+            vpnctl.init_config(self.root, "bad host", "admin")
+        self.assertFalse((self.root / "inventory" / "hosts.yml").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
